@@ -3,63 +3,78 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import { GoogleGenAI, GenerateContentResponse, Modality } from "@google/genai";
+type InlineDataPart = {
+    mimeType: string;
+    data: string;
+};
 
-const fileToPart = async (file: File) => {
+type ProxyPart =
+    | { type: 'text'; text: string }
+    | { type: 'inlineData'; inlineData: InlineDataPart };
+
+type GeminiProxyRequest = {
+    model?: string;
+    parts: ProxyPart[];
+    generationConfig?: Record<string, unknown>;
+    safetySettings?: unknown[];
+};
+
+type GeminiProxyResponse = {
+    imageDataUrl?: string;
+    error?: string;
+};
+
+const DEFAULT_MODEL = 'gemini-2.5-flash-image-preview';
+const DEFAULT_BASE_URL = 'http://localhost:4000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/?$/, '') ?? DEFAULT_BASE_URL;
+
+const fileToInlineData = async (file: File): Promise<InlineDataPart> => {
     const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
         reader.onload = () => resolve(reader.result as string);
         reader.onerror = error => reject(error);
     });
-    const { mimeType, data } = dataUrlToParts(dataUrl);
-    return { inlineData: { mimeType, data } };
+    return dataUrlToInlineData(dataUrl);
 };
 
-const dataUrlToParts = (dataUrl: string) => {
-    const arr = dataUrl.split(',');
-    if (arr.length < 2) throw new Error("Invalid data URL");
-    const mimeMatch = arr[0].match(/:(.*?);/);
-    if (!mimeMatch || !mimeMatch[1]) throw new Error("Could not parse MIME type from data URL");
-    return { mimeType: mimeMatch[1], data: arr[1] };
-}
-
-const dataUrlToPart = (dataUrl: string) => {
-    const { mimeType, data } = dataUrlToParts(dataUrl);
-    return { inlineData: { mimeType, data } };
-}
-
-const handleApiResponse = (response: GenerateContentResponse): string => {
-    if (response.promptFeedback?.blockReason) {
-        const { blockReason, blockReasonMessage } = response.promptFeedback;
-        const errorMessage = `Request was blocked. Reason: ${blockReason}. ${blockReasonMessage || ''}`;
-        throw new Error(errorMessage);
+const dataUrlToInlineData = (dataUrl: string): InlineDataPart => {
+    const [metadata, base64Data] = dataUrl.split(',');
+    if (!metadata || !base64Data) {
+        throw new Error('Invalid data URL.');
     }
-
-    // Find the first image part in any candidate
-    for (const candidate of response.candidates ?? []) {
-        const imagePart = candidate.content?.parts?.find(part => part.inlineData);
-        if (imagePart?.inlineData) {
-            const { mimeType, data } = imagePart.inlineData;
-            return `data:${mimeType};base64,${data}`;
-        }
+    const mimeMatch = metadata.match(/:(.*?);/);
+    if (!mimeMatch?.[1]) {
+        throw new Error('Could not parse MIME type from data URL.');
     }
-
-    const finishReason = response.candidates?.[0]?.finishReason;
-    if (finishReason && finishReason !== 'STOP') {
-        const errorMessage = `Image generation stopped unexpectedly. Reason: ${finishReason}. This often relates to safety settings.`;
-        throw new Error(errorMessage);
-    }
-    const textFeedback = response.text?.trim();
-    const errorMessage = `The AI model did not return an image. ` + (textFeedback ? `The model responded with text: "${textFeedback}"` : "This can happen due to safety filters or if the request is too complex. Please try a different image.");
-    throw new Error(errorMessage);
+    return { mimeType: mimeMatch[1], data: base64Data };
 };
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
-const model = 'gemini-2.5-flash-image-preview';
+const postToGeminiProxy = async (payload: GeminiProxyRequest): Promise<string> => {
+    const response = await fetch(`${API_BASE_URL}/api/gemini/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            model: DEFAULT_MODEL,
+            ...payload,
+        }),
+    });
+
+    const data: GeminiProxyResponse = await response.json().catch(() => ({ error: 'Invalid JSON response from server.' }));
+
+    if (!response.ok) {
+        throw new Error(data.error || `Request failed with status ${response.status}.`);
+    }
+
+    if (!data.imageDataUrl) {
+        throw new Error(data.error || 'The AI model did not return an image.');
+    }
+
+    return data.imageDataUrl;
+};
 
 export const generateModelImage = async (userImage: File): Promise<string> => {
-    const userImagePart = await fileToPart(userImage);
+    const userImagePart = await fileToInlineData(userImage);
     const prompt = `You are an expert fashion photographer AI. Transform the person in this image into a full-body fashion model photo suitable for a high-end e-commerce website.
 
 **Crucial Rules:**
@@ -69,19 +84,18 @@ export const generateModelImage = async (userImage: File): Promise<string> => {
 4.  **Preserve Identity:** Preserve the person's identity, unique features, and body type from the original photo.
 5.  **Photorealism:** The final image must be photorealistic.
 6.  **Output:** Return ONLY the final image.`;
-    const response = await ai.models.generateContent({
-        model,
-        contents: { parts: [userImagePart, { text: prompt }] },
-        config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
-        },
+
+    return postToGeminiProxy({
+        parts: [
+            { type: 'inlineData', inlineData: userImagePart },
+            { type: 'text', text: prompt },
+        ],
     });
-    return handleApiResponse(response);
 };
 
 export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentImage: File): Promise<string> => {
-    const modelImagePart = dataUrlToPart(modelImageUrl);
-    const garmentImagePart = await fileToPart(garmentImage);
+    const modelImagePart = dataUrlToInlineData(modelImageUrl);
+    const garmentImagePart = await fileToInlineData(garmentImage);
     const prompt = `You are an expert virtual try-on AI with a deep understanding of fashion and physics. You will be given a 'model image' which shows a person already wearing an outfit, and a 'garment image' which shows a single piece of clothing. Your task is to create a new, photorealistic image where the person from the 'model image' is now wearing the new garment layered realistically on top of their current outfit.
 
 **Crucial Rules:**
@@ -93,25 +107,24 @@ export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentIm
 3.  **Preserve the Model:** The person's identity, face, hair, body shape, and pose from the 'model image' MUST remain absolutely unchanged.
 4.  **Preserve the Background:** The entire background from the 'model image' MUST be preserved perfectly. No part of the background should be altered.
 5.  **Output:** Return ONLY the final, edited image. Do not include any text, descriptions, or explanations.`;
-    const response = await ai.models.generateContent({
-        model,
-        contents: { parts: [modelImagePart, garmentImagePart, { text: prompt }] },
-        config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
-        },
+
+    return postToGeminiProxy({
+        parts: [
+            { type: 'inlineData', inlineData: modelImagePart },
+            { type: 'inlineData', inlineData: garmentImagePart },
+            { type: 'text', text: prompt },
+        ],
     });
-    return handleApiResponse(response);
 };
 
 export const generatePoseVariation = async (tryOnImageUrl: string, poseInstruction: string): Promise<string> => {
-    const tryOnImagePart = dataUrlToPart(tryOnImageUrl);
+    const tryOnImagePart = dataUrlToInlineData(tryOnImageUrl);
     const prompt = `You are an expert fashion photographer AI. Take this image and regenerate it from a different perspective. The person, clothing, and background style must remain identical. The new perspective should be: "${poseInstruction}". Return ONLY the final image.`;
-    const response = await ai.models.generateContent({
-        model,
-        contents: { parts: [tryOnImagePart, { text: prompt }] },
-        config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
-        },
+
+    return postToGeminiProxy({
+        parts: [
+            { type: 'inlineData', inlineData: tryOnImagePart },
+            { type: 'text', text: prompt },
+        ],
     });
-    return handleApiResponse(response);
 };

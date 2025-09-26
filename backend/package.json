@@ -1,0 +1,18 @@
+{
+  "name": "closet-city-backend",
+  "version": "0.1.0",
+  "description": "Secure backend gateway for closet.city AI calls",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@google-cloud/aiplatform": "^3.13.0",
+    "pg": "^8.11.5"
+  },
+  "keywords": ["closet.city", "backend", "proxy"],
+  "author": "",
+  "license": "MIT"
+}
