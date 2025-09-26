@@ -11,6 +11,16 @@ The project now runs as a two-tier app:
 
 View the latest AI Studio snapshot: https://ai.studio/apps/drive/1o4sdsi64P6s8PuOpv4CUJkyiRkihctjO
 
+## Quick Start
+
+**Automated Setup** (Recommended):
+```bash
+./setup-dev.sh
+code closet-city.code-workspace
+```
+
+**Manual Setup**: Continue reading below.
+
 ## Prerequisites
 
 - Node.js 20+
@@ -56,3 +66,11 @@ Set the frontend environment variable `VITE_API_BASE_URL` (e.g., in a `.env.loca
 | `node backend/server.js` | Start the backend proxy in Node.js. |
 
 This setup removes the need to expose `GEMINI_API_KEY` in the browser while keeping the existing AI flows intact.
+
+## Enhanced Development Experience
+
+For the best development experience with GitHub Copilot and VS Code:
+
+- **📖 See [DEVELOPMENT.md](DEVELOPMENT.md)** for comprehensive development guide
+- **🚀 Use `./setup-dev.sh`** for automated environment setup  
+- **⚡ Open `closet-city.code-workspace`** for optimized VS Code configuration
